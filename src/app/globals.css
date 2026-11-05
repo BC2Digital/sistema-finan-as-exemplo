@@ -1,0 +1,154 @@
+@import 'tailwindcss';
+
+/* Tema escuro com vidro (glass) e gradiente roxo/rosa. Troque as cores da
+   marca aqui embaixo pra deixar o sistema com a sua cara. */
+:root {
+  --brand-rosa: #f72585;
+  --brand-roxo: #7209b7;
+  --brand-azul-escuro: #3a0ca3;
+  --brand-azul-royal: #3a0cce;
+  --brand-branco: #f5f3f4;
+  --brand-gradient: linear-gradient(45deg, var(--brand-azul-royal) 0%, var(--brand-azul-escuro) 30%, var(--brand-roxo) 65%, var(--brand-rosa) 100%);
+
+  --background: #0a0908;
+  --foreground: #dcdce2;
+  --card: #131317;
+  --card-foreground: #dcdce2;
+  --popover: #1a1a20;
+  --popover-foreground: #dcdce2;
+  --primary: var(--brand-roxo);
+  --primary-foreground: var(--brand-branco);
+  --muted: #1a1a20;
+  --muted-foreground: #b4b4be;
+  --border: #242430;
+  --input: #2a2a35;
+  --radius: 0.5rem;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --font-sans: var(--font-poppins), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+/* fundo da pagina com brilho leve roxo/rosa */
+.brand-page-glow {
+  background-image:
+    radial-gradient(1100px 480px at 8% -10%, rgba(114, 9, 183, 0.16), transparent 60%),
+    radial-gradient(900px 420px at 100% 0%, rgba(247, 37, 133, 0.1), transparent 60%);
+  background-repeat: no-repeat;
+}
+
+.brand-subtitle {
+  font-weight: 200;
+  color: rgba(220, 220, 226, 0.8);
+  margin-top: 0.375rem;
+}
+
+.brand-accent-bar {
+  display: block;
+  height: 3px;
+  width: 48px;
+  border-radius: 999px;
+  background: var(--brand-gradient);
+}
+
+/* vidro dos cards */
+.brand-glass {
+  position: relative;
+  background:
+    radial-gradient(130% 160% at 0% 0%, rgba(58, 12, 206, 0.16), transparent 55%),
+    radial-gradient(130% 160% at 100% 100%, rgba(247, 37, 133, 0.11), transparent 55%),
+    linear-gradient(165deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.06),
+    0 10px 30px -14px rgba(0, 0, 0, 0.55);
+  transition: border-color 0.2s ease;
+}
+
+.brand-glass:hover {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+/* vidro discreto pra elemento dentro de um card */
+.brand-glass-tile {
+  background: rgba(255, 255, 255, 0.035);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  transition: border-color 0.2s ease;
+}
+
+.brand-glass-tile:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+/* superficies flutuantes (lista do select, calendario, popups) */
+.brand-glass-menu {
+  background:
+    radial-gradient(130% 160% at 0% 0%, rgba(58, 12, 206, 0.09), transparent 45%),
+    radial-gradient(130% 160% at 100% 100%, rgba(247, 37, 133, 0.06), transparent 45%),
+    color-mix(in srgb, #0c0c10 96%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.05),
+    0 10px 30px -14px rgba(0, 0, 0, 0.7);
+}
+
+/* estado "selecionado" unico do sistema */
+.brand-solo-active-glass {
+  background: linear-gradient(135deg, rgba(114, 9, 183, 0.09), rgba(247, 37, 133, 0.07));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--brand-branco);
+}
+
+.brand-solo-active-glass:hover {
+  background: linear-gradient(135deg, rgba(114, 9, 183, 0.13), rgba(247, 37, 133, 0.1));
+}
+
+.brand-button-primary {
+  background: var(--brand-gradient);
+}
+
+.brand-button-primary:hover {
+  filter: brightness(1.1);
+}
+
+[data-slot='select-item']:hover,
+[data-slot='select-item']:focus-visible,
+[data-slot='select-item'][data-highlighted] {
+  background: linear-gradient(135deg, rgba(114, 9, 183, 0.09), rgba(247, 37, 133, 0.07));
+  color: var(--brand-branco);
+}
