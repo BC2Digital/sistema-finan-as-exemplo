@@ -59,10 +59,23 @@ create table if not exists public.faturas_pagamentos (
   primary key (cartao_id, vencimento)
 );
 
+-- ordem de prioridade das contas fixas no grupo "Mês" (opcional): chave
+-- "cartao:<id do cartao>" pra fatura ou "grupo:<parcela_grupo_id>" pra um
+-- parcelado/recorrente. Ordem 1 fica no fim da lista, 2 logo acima e assim
+-- por diante. Sem linha aqui, faturas e recorrentes ficam no fim e o resto
+-- acima, do cadastro mais novo pro mais antigo.
+create table if not exists public.ordem_mes (
+  user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  chave text not null,
+  ordem int not null,
+  primary key (user_id, chave)
+);
+
 alter table public.cartoes enable row level security;
 alter table public.categorias enable row level security;
 alter table public.lancamentos enable row level security;
 alter table public.faturas_pagamentos enable row level security;
+alter table public.ordem_mes enable row level security;
 
 drop policy if exists "dono" on public.cartoes;
 create policy "dono" on public.cartoes for all to authenticated
@@ -78,4 +91,8 @@ create policy "dono" on public.lancamentos for all to authenticated
 
 drop policy if exists "dono" on public.faturas_pagamentos;
 create policy "dono" on public.faturas_pagamentos for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+drop policy if exists "dono" on public.ordem_mes;
+create policy "dono" on public.ordem_mes for all to authenticated
   using (user_id = auth.uid()) with check (user_id = auth.uid());

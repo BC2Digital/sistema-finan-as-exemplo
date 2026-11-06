@@ -5,10 +5,10 @@ import type { FaturamentoMes } from '@/lib/financas-extra'
 import { MASCARA_VALOR, useOcultarValores } from '@/hooks/use-ocultar-valores'
 import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 
-// Grafico de faturamento mes a mes do ano (Recebíveis), aberto pelo botao
-// no canto superior direito do card de lançamentos. Soma de todas as
-// entradas de cada mes (inclusive permuta), so os meses que ja chegaram.
-// No computador as barras ficam em pe, no celular deitadas.
+// Graficos de faturamento (Recebíveis), abertos pelos botoes no canto
+// superior direito do card de lançamentos: mes a mes (os 12 meses do ano,
+// mesmo os vazios) e por ano. Soma de todas as entradas (inclusive
+// permuta). No computador as barras ficam em pe, no celular deitadas.
 const COR_FATURAMENTO = '#3987e5'
 
 // Valor sem centavos no rotulo da barra ("R$ 5.100"): com ate 12 colunas

@@ -31,13 +31,26 @@ import {
   type FluxoPessoalMes,
 } from '@/lib/financas-fluxo'
 import {
+  alterarQuantidadeParcelas,
   excluirLancamentoComEscopo,
+  getCadastradoEm,
+  getFaturamentoPorAno,
   getFaturamentoPorMes,
+  getOrdemMes,
   type EscopoExclusao,
   type FaturamentoMes,
 } from '@/lib/financas-extra'
+import {
+  EXEMPLO_PESSOAL,
+  exemploPessoal,
+  faturamentoExemploAno,
+  faturamentoExemploMeses,
+  faturamentoExemploPorAno,
+  lancamentosExemploRecebiveis,
+} from '@/lib/financas-exemplo'
 import { cn } from '@/lib/utils'
 import { MASCARA_VALOR, definirOcultarValores, useOcultarValores } from '@/hooks/use-ocultar-valores'
+import { definirModoExemplo, useModoExemplo } from '@/hooks/use-modo-exemplo'
 import { formatBRL } from '@/lib/format'
 import { MES_ABREV, MES_NOMES } from '@/lib/periodo'
 import type { MesAno } from '@/components/filtro-mes'
@@ -60,9 +73,11 @@ import {
   IconCash,
   IconChartBar,
   IconChartCandle,
+  IconChartHistogram,
   IconChartPie,
   IconCheck,
-  IconChevronDown,
+  IconChevronLeft,
+  IconChevronRight,
   IconConfetti,
   IconCreditCard,
   IconGasStation,
@@ -89,10 +104,19 @@ function hoje() {
   return `${ano}-${mes}-${dia}`
 }
 
+// Parcela: "∞" no recorrente e "N/total" sempre que tiver parcela
+// informada (inclusive "1/1").
 function sufixoParcela(l: FinanceiroLancamento) {
   if (l.parcelaIndefinida) return '∞'
-  if (l.parcelaTotal && l.parcelaTotal > 1) return `${l.parcelaNumero}/${l.parcelaTotal}`
+  if (l.parcelaTotal && l.parcelaTotal >= 1) return `${l.parcelaNumero ?? 1}/${l.parcelaTotal}`
   return ''
+}
+
+// Parcela sempre ao lado do nome (ex: "Notebook 2/12").
+function SeloParcela({ l }: { l: FinanceiroLancamento }) {
+  const texto = sufixoParcela(l)
+  if (!texto) return null
+  return <span className="ml-1.5 text-xs font-light tabular-nums text-muted-foreground">{texto}</span>
 }
 
 function ehSerie(l: FinanceiroLancamento | null): boolean {
@@ -105,11 +129,6 @@ const OPCOES_ESCOPO: { valor: EscopoExclusao; rotulo: string }[] = [
   { valor: 'proximos', rotulo: 'Este e próximos' },
   { valor: 'todos', rotulo: 'Todos' },
 ]
-
-function formatDataCurta(iso: string): string {
-  const [, mes, dia] = iso.split('-')
-  return `${dia}/${mes}`
-}
 
 function subtituloFatura(f: FaturaCartao): string {
   const n = f.compras.length
@@ -300,21 +319,29 @@ interface FinanceiroPainelProps {
 //
 // Lista: linha do tempo por dia com o que foi gasto no mes (sem os
 // programados e sem as parcelas 2 em diante de compra no cartao, que ja
-// estao dentro da fatura) e, no fim, o grupo "Este mês" com tudo que tem
-// que ser pago no mes (faturas + programados) por data de pagamento. A
-// fatura abre as compras dela pela setinha e o icone a esquerda marca como
-// pago (so visual). Clicar no valor abre o popup de editar/excluir.
+// estao dentro da fatura) e, no fim, o grupo "Mês" com tudo que tem que
+// ser pago no mes (faturas + programados), sem data. Ordem do "Mês": em
+// baixo as contas fixas (faturas e recorrentes, ou a prioridade da tabela
+// ordem_mes); acima delas o resto, do cadastro mais novo pro mais antigo.
+// Clicar no nome da fatura abre as compras dela e o icone a esquerda marca
+// como pago (so visual). Clicar no valor abre o popup de editar/excluir
+// (com quantidade de parcelas e exclusao em 2 toques).
+//
+// Pix programado nao pede data: entra no mes selecionado e aceita valor
+// 0,00 ate saber o valor. Nº "1" registra como parcela "1/1".
 //
 // Filtros de Pagamento e Categoria afetam Saídas, Cartão de crédito e a
 // lista (com filtro as faturas saem). Saldo, A receber e graficos ignoram
 // os filtros. Clicar no valor do 4º card liga/desliga o modo ocultar
-// valores.
+// valores; clicar no valor do 2º card (Recebido / Saídas) liga/desliga o
+// modo de exemplo (ver use-modo-exemplo.ts).
 export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
   const tipo: FinanceiroTipo = area === 'recebiveis' ? 'entrada' : 'saida'
   const anoAtual = new Date().getFullYear()
 
   const ocultarValores = useOcultarValores()
   const brl = (v: number) => (ocultarValores ? MASCARA_VALOR : formatBRL(v))
+  const modoExemplo = useModoExemplo()
 
   const [lancamentosDoMes, setLancamentosDoMes] = useState<FinanceiroLancamento[]>([])
   const [lancamentosProximoMes, setLancamentosProximoMes] = useState<FinanceiroLancamento[]>([])
@@ -322,6 +349,12 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
   const [categorias, setCategorias] = useState<FinanceiroCategoria[]>([])
   const [faturamentoAno, setFaturamentoAno] = useState(0)
   const [faturamentoMensal, setFaturamentoMensal] = useState<FaturamentoMes[]>([])
+  const [faturamentoAnual, setFaturamentoAnual] = useState<FaturamentoMes[]>([])
+  // ano do grafico mes a mes (setinhas no canto do card)
+  const [anoGrafico, setAnoGrafico] = useState(mesAno.ano)
+  // prioridade das contas fixas no grupo "Mês" (tabela ordem_mes)
+  const [ordemMes, setOrdemMes] = useState<Map<string, number>>(new Map())
+  const [cadastradoEm, setCadastradoEm] = useState<Map<string, string>>(new Map())
   const [fluxo, setFluxo] = useState<FluxoPessoalMes | null>(null)
   const [carregando, setCarregando] = useState(true)
 
@@ -338,7 +371,9 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
   const [filtroCartao, setFiltroCartao] = useState('todos')
   const [filtroCategoria, setFiltroCategoria] = useState('todos')
 
-  const [visualizacao, setVisualizacao] = useState<'lista' | 'pizza' | 'categorias' | 'faturamento'>('lista')
+  const [visualizacao, setVisualizacao] = useState<
+    'lista' | 'pizza' | 'categorias' | 'faturamento' | 'faturamentoAnual'
+  >('lista')
 
   const [faturasAbertas, setFaturasAbertas] = useState<Set<string>>(new Set())
 
@@ -351,6 +386,10 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
   const [editData, setEditData] = useState('')
   const [editCartaoId, setEditCartaoId] = useState('')
   const [editProgramado, setEditProgramado] = useState(false)
+  // quantidade de parcelas no popup (vazio = sem parcela)
+  const [editParcelas, setEditParcelas] = useState('')
+  // exclusao em 2 toques (window.confirm nao funciona bem no celular)
+  const [confirmandoExclusao, setConfirmandoExclusao] = useState(false)
   const [escopoExclusao, setEscopoExclusao] = useState<EscopoExclusao>('este')
   const [salvandoEdicao, setSalvandoEdicao] = useState(false)
   const [excluindo, setExcluindo] = useState(false)
@@ -369,6 +408,16 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
   useEffect(() => {
     carregar()
   }, [area, mesAno.mes, mesAno.ano])
+
+  // grafico mes a mes: acompanha o ano do mes selecionado e as setinhas
+  useEffect(() => {
+    setAnoGrafico(mesAno.ano)
+  }, [mesAno.ano])
+
+  useEffect(() => {
+    if (area !== 'recebiveis') return
+    getFaturamentoPorMes(anoGrafico).then(setFaturamentoMensal)
+  }, [area, anoGrafico])
 
   useEffect(() => {
     if (visualizacao === 'lista') return
@@ -394,14 +443,19 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
     setCategorias(cats)
 
     if (area === 'recebiveis') {
-      const [totalAno, porMes] = await Promise.all([
-        getFaturamentoAno(anoAtual),
-        getFaturamentoPorMes(mesAno.ano),
-      ])
+      const [totalAno, porAno] = await Promise.all([getFaturamentoAno(anoAtual), getFaturamentoPorAno()])
       setFaturamentoAno(totalAno)
-      setFaturamentoMensal(porMes)
+      setFaturamentoAnual(porAno)
     } else {
-      setFluxo(await calcularFluxoPessoal(mesAno.mes, mesAno.ano))
+      const programados = doMes.filter((l) => l.programado).map((l) => l.id)
+      const [fluxoMes, ordem, cadastro] = await Promise.all([
+        calcularFluxoPessoal(mesAno.mes, mesAno.ano),
+        getOrdemMes(),
+        getCadastradoEm(programados),
+      ])
+      setFluxo(fluxoMes)
+      setOrdemMes(ordem)
+      setCadastradoEm(cadastro)
     }
 
     setCarregando(false)
@@ -413,23 +467,46 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
     return true
   }
 
+  // Modo de exemplo: lançamentos, faturas e cards passam a vir de
+  // financas-exemplo.ts (mesmos cartoes e categorias, valores inventados).
+  const exemplo =
+    modoExemplo && area === 'pessoal' ? exemploPessoal(mesAno.ano, mesAno.mes, cartoesSelecionaveis, nomesCategorias) : null
+  const proximoMesAno = mesSeguinte(mesAno)
+  const doMesBase = !modoExemplo
+    ? lancamentosDoMes
+    : exemplo
+      ? exemplo.lancamentos
+      : lancamentosExemploRecebiveis(mesAno.ano, mesAno.mes)
+  const doProximoBase =
+    modoExemplo && area === 'recebiveis'
+      ? lancamentosExemploRecebiveis(proximoMesAno.ano, proximoMesAno.mes)
+      : lancamentosProximoMes
+  const ordemMesBase = exemplo ? new Map([...ordemMes, ...exemplo.ordem]) : ordemMes
+
   const temFiltroAtivo = area === 'pessoal' && (filtroCartao !== 'todos' || filtroCategoria !== 'todos')
-  const doMesFiltrado = temFiltroAtivo ? lancamentosDoMes.filter(passaFiltro) : lancamentosDoMes
+  const doMesFiltrado = temFiltroAtivo ? doMesBase.filter(passaFiltro) : doMesBase
 
-  const resumo = calcularResumoDoMes(lancamentosDoMes, lancamentosProximoMes)
+  const resumo = calcularResumoDoMes(doMesBase, doProximoBase)
 
-  const saldoPessoal = fluxo?.saldo ?? 0
+  const saldoPessoal = exemplo ? EXEMPLO_PESSOAL.saldo : (fluxo?.saldo ?? 0)
   const saidasPessoal = temFiltroAtivo
     ? doMesFiltrado
         .filter((l) => l.area === 'pessoal' && l.tipo === 'saida' && !ehAjusteSaldo(l))
         .reduce((acc, l) => acc + l.valor, 0)
-    : (fluxo?.saidasDoMes ?? 0)
-  const aReceberPessoal =
-    area === 'pessoal' ? resumo.aReceberProximoMes : 0
+    : exemplo
+      ? EXEMPLO_PESSOAL.saidas
+      : (fluxo?.saidasDoMes ?? 0)
+  const aReceberPessoal = exemplo ? EXEMPLO_PESSOAL.aReceber : area === 'pessoal' ? resumo.aReceberProximoMes : 0
 
   const comprasProximaFatura = fluxo?.comprasProximaFatura ?? []
-  const totalFaturaAberta = (temFiltroAtivo ? comprasProximaFatura.filter(passaFiltro) : comprasProximaFatura)
-    .reduce((acc, c) => acc + c.valor, 0)
+  const totalFaturaAberta = exemplo
+    ? temFiltroAtivo
+      ? doMesFiltrado.filter((l) => !l.programado && ehCompraNoCredito(l)).reduce((acc, l) => acc + l.valor, 0)
+      : EXEMPLO_PESSOAL.cartaoCredito
+    : (temFiltroAtivo ? comprasProximaFatura.filter(passaFiltro) : comprasProximaFatura).reduce(
+        (acc, c) => acc + c.valor,
+        0
+      )
 
   const saidasDoMesLista = doMesFiltrado.filter((l) => l.tipo !== 'entrada' && !ehAjusteSaldo(l))
   const linhaDoTempo: ItemLista[] =
@@ -438,22 +515,51 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
           (l) => !l.programado && (temFiltroAtivo || !(ehCompraNoCredito(l) && (l.parcelaNumero ?? 1) > 1))
         )
       : doMesFiltrado
+  // Ordem do "Mês": em baixo as contas fixas (prioridade da tabela
+  // ordem_mes, maior em cima; sem prioridade, faturas e recorrentes ficam
+  // no fim); acima delas o resto, do cadastro mais novo pro mais antigo.
+  const ordemDoItem = (i: ItemLista): number | undefined => {
+    const definida = i.fatura
+      ? ordemMesBase.get(`cartao:${i.fatura.cartaoId}`)
+      : i.parcelaGrupoId
+        ? ordemMesBase.get(`grupo:${i.parcelaGrupoId}`)
+        : undefined
+    if (definida !== undefined) return definida
+    return i.fatura || i.parcelaIndefinida ? 0 : undefined
+  }
+  const cadastroDe = (i: ItemLista) => cadastradoEm.get(i.id) ?? i.criadoEm
   const itensEsteMes: ItemLista[] =
     area === 'pessoal'
       ? [
-          ...(temFiltroAtivo ? [] : (fluxo?.faturasDoMes ?? []).map(faturaComoItem)),
+          ...(temFiltroAtivo ? [] : (exemplo ? exemplo.faturas : (fluxo?.faturasDoMes ?? [])).map(faturaComoItem)),
           ...saidasDoMesLista.filter((l) => l.programado),
-        ].sort((a, b) => a.data.localeCompare(b.data))
+        ].sort((a, b) => {
+          const oa = ordemDoItem(a)
+          const ob = ordemDoItem(b)
+          if (oa === undefined && ob !== undefined) return -1
+          if (ob === undefined && oa !== undefined) return 1
+          if (oa !== undefined && ob !== undefined && oa !== ob) return ob - oa
+          return cadastroDe(b).localeCompare(cadastroDe(a))
+        })
       : []
   const gruposPorData = agruparPorData(linhaDoTempo)
 
-  const dadosCategoria = agruparPorCategoria(lancamentosDoMes.filter((l) => l.tipo !== 'entrada'), nomesCategorias)
+  const dadosCategoria = agruparPorCategoria(doMesBase.filter((l) => l.tipo !== 'entrada'), nomesCategorias)
 
   const editandoEhSerie = ehSerie(editando)
 
+  // Pix programado nao pede data: entra no mes selecionado (hoje, se for o
+  // mes atual; senao dia 1) e pode ter valor 0,00 ate saber o valor.
+  const ehProgramado = area === 'pessoal' && programado
+  function dataDoMesSelecionado(): string {
+    const hojeIso = hoje()
+    const prefixo = `${mesAno.ano}-${String(mesAno.mes + 1).padStart(2, '0')}`
+    return hojeIso.startsWith(prefixo) ? hojeIso : `${prefixo}-01`
+  }
+
   async function salvar() {
     const valorNumerico = paraNumero(valor)
-    if (!descricao.trim() || !valorNumerico || valorNumerico <= 0) return
+    if (!descricao.trim() || valorNumerico < 0 || (!ehProgramado && valorNumerico <= 0)) return
 
     setSalvando(true)
 
@@ -463,13 +569,14 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
       descricao,
       categoria,
       valor: valorNumerico,
-      data,
+      data: ehProgramado ? dataDoMesSelecionado() : data,
       cartaoId: area === 'pessoal' ? cartaoId || null : null,
       permuta: area === 'recebiveis' && permuta,
       programado: area === 'pessoal' && programado,
     }
     if (parcelasEhIndefinida) await createLancamentoRecorrente(novo)
-    else if (parcelasTotalNumerico > 1) await createLancamentoParcelado(novo, parcelasTotalNumerico)
+    // "1" tambem vira parcela ("1/1"): sempre que informar parcela, ela aparece
+    else if (parcelasTotalNumerico > 1 || parcelasTrim === '1') await createLancamentoParcelado(novo, parcelasTotalNumerico)
     else await createLancamento(novo)
 
     setDescricao('')
@@ -482,6 +589,8 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
   }
 
   function abrirEdicao(l: FinanceiroLancamento) {
+    // no modo de exemplo os lançamentos nao existem no banco
+    if (modoExemplo) return
     setEditando(l)
     setEditDescricao(l.descricao)
     setEditCategoria(l.categoria)
@@ -489,6 +598,8 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
     setEditData(l.data)
     setEditCartaoId(l.cartaoId ?? '')
     setEditProgramado(!!l.programado)
+    setEditParcelas(l.parcelaTotal && l.parcelaTotal >= 1 ? String(l.parcelaTotal) : '')
+    setConfirmandoExclusao(false)
     setEscopoExclusao('este')
   }
 
@@ -499,7 +610,9 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
   async function salvarEdicao() {
     if (!editando) return
     const valorNumerico = paraNumero(editValor)
-    if (!editDescricao.trim() || !valorNumerico || valorNumerico <= 0) return
+    // programado pode ficar com 0,00 ate saber o valor
+    const podeZero = editProgramado || !!editando.programado
+    if (!editDescricao.trim() || valorNumerico < 0 || (!podeZero && valorNumerico <= 0)) return
 
     setSalvandoEdicao(true)
     await updateLancamento(editando.id, {
@@ -512,6 +625,12 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
     if (area === 'pessoal' && editProgramado !== !!editando.programado) {
       await definirProgramado(editando.id, editando.parcelaGrupoId, editProgramado)
     }
+    // quantidade de parcelas (recorrente nao tem total): 0 = sem parcela
+    if (!editando.parcelaIndefinida) {
+      const totalAtual = editando.parcelaTotal ?? 0
+      const totalNovo = Number(editParcelas) || 0
+      if (totalNovo !== totalAtual) await alterarQuantidadeParcelas(editando.id, totalNovo)
+    }
     setSalvandoEdicao(false)
     setEditando(null)
     carregar()
@@ -520,13 +639,11 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
   async function excluirEdicao() {
     if (!editando) return
     const escopo: EscopoExclusao = editandoEhSerie ? escopoExclusao : 'este'
-    const mensagem =
-      escopo === 'todos'
-        ? 'Excluir todos os lançamentos desta série, inclusive os anteriores?'
-        : escopo === 'proximos'
-          ? 'Excluir este lançamento e todos os próximos desta série?'
-          : 'Excluir este lançamento?'
-    if (!window.confirm(mensagem)) return
+    // 1º toque so pede confirmacao no proprio botao, o 2º exclui
+    if (!confirmandoExclusao) {
+      setConfirmandoExclusao(true)
+      return
+    }
 
     setExcluindo(true)
     await excluirLancamentoComEscopo({
@@ -542,6 +659,7 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
   }
 
   async function alternarPago(item: ItemLista) {
+    if (modoExemplo) return
     const pago = !estaPago(item)
     const pagoEm = pago ? hoje() : null
     const fatura = item.fatura
@@ -569,6 +687,7 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
   }
 
   function abrirAjusteSaldo() {
+    if (modoExemplo) return
     setValorAjuste(saldoPessoal > 0 ? formatarValorNumero(saldoPessoal) : '')
     setAjustandoSaldo(true)
   }
@@ -608,7 +727,14 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
         <Card size="sm">
           <CardContent>
             <p className="text-xs text-muted-foreground">{area === 'recebiveis' ? 'Recebido' : 'Saídas'}</p>
-            <p className={cn('mt-1 text-lg font-medium', area === 'recebiveis' ? 'text-blue-400' : 'text-rose-400')}>
+            {/* clicar no valor liga/desliga o modo de exemplo */}
+            <p
+              onClick={() => definirModoExemplo(!modoExemplo)}
+              onKeyDown={(e) => e.key === 'Enter' && definirModoExemplo(!modoExemplo)}
+              role="button"
+              tabIndex={0}
+              className={cn('mt-1 text-lg font-medium outline-none', area === 'recebiveis' ? 'text-blue-400' : 'text-rose-400')}
+            >
               {area === 'recebiveis' ? brl(resumo.entradasReais) : `- ${brl(saidasPessoal)}`}
             </p>
           </CardContent>
@@ -633,7 +759,7 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
               tabIndex={0}
               className="mt-1 text-lg font-medium outline-none"
             >
-              {brl(area === 'recebiveis' ? faturamentoAno : aReceberPessoal)}
+              {brl(area === 'recebiveis' ? (modoExemplo ? faturamentoExemploAno(anoAtual) : faturamentoAno) : aReceberPessoal)}
             </p>
           </CardContent>
         </Card>
@@ -759,7 +885,8 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
                 >
                   <IconCalendarRepeat />
                 </Button>
-                <DatePickerIcone value={data} onChange={setData} />
+                {/* programado nao pede data (entra no mes selecionado) */}
+                {!programado && <DatePickerIcone value={data} onChange={setData} />}
                 <Button
                   onClick={salvar}
                   disabled={salvando}
@@ -780,11 +907,14 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
           <CardTitle>
             {visualizacao === 'pizza' && `Categorias ${MES_NOMES[mesAno.mes]}`}
             {visualizacao === 'categorias' && `Gastos ${MES_NOMES[mesAno.mes]}`}
-            {visualizacao === 'faturamento' && `Faturamento ${mesAno.ano}`}
+            {visualizacao === 'faturamento' && `Faturamento ${anoGrafico}`}
+            {visualizacao === 'faturamentoAnual' && 'Faturamento por ano'}
             {visualizacao === 'lista' && `Lançamento ${MES_NOMES[mesAno.mes]}`}
           </CardTitle>
           {area === 'recebiveis' && (
-            <CardAction>
+            // grafico mes a mes e por ano; com o mes a mes aberto, as setinhas
+            // trocam o ano. Clicar de novo no icone aberto volta pra lista.
+            <CardAction className="flex items-center gap-1">
               <Button
                 type="button"
                 variant="ghost"
@@ -798,6 +928,43 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
               >
                 <IconChartBar />
               </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => setVisualizacao((v) => (v === 'faturamentoAnual' ? 'lista' : 'faturamentoAnual'))}
+                aria-label="Gráfico de faturamento por ano"
+                className={cn(
+                  'text-muted-foreground hover:text-foreground',
+                  visualizacao === 'faturamentoAnual' && 'brand-solo-active-glass text-foreground'
+                )}
+              >
+                <IconChartHistogram />
+              </Button>
+              {visualizacao === 'faturamento' && (
+                <>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setAnoGrafico((a) => a - 1)}
+                    aria-label="Ano anterior"
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <IconChevronLeft />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setAnoGrafico((a) => a + 1)}
+                    aria-label="Próximo ano"
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <IconChevronRight />
+                  </Button>
+                </>
+              )}
             </CardAction>
           )}
         </CardHeader>
@@ -870,7 +1037,12 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
             <div ref={graficoRef} className="scroll-mb-4">
               {visualizacao === 'pizza' && <GraficoPizzaCategorias dados={dadosCategoria} />}
               {visualizacao === 'categorias' && <GraficoBarrasCategorias dados={dadosCategoria} />}
-              {visualizacao === 'faturamento' && <GraficoFaturamentoMensal dados={faturamentoMensal} />}
+              {visualizacao === 'faturamento' && (
+                <GraficoFaturamentoMensal dados={modoExemplo ? faturamentoExemploMeses(anoGrafico) : faturamentoMensal} />
+              )}
+              {visualizacao === 'faturamentoAnual' && (
+                <GraficoFaturamentoMensal dados={modoExemplo ? faturamentoExemploPorAno() : faturamentoAnual} />
+              )}
             </div>
           )}
 
@@ -898,9 +1070,12 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
                   <div className="flex min-w-0 items-center gap-3">
                     <IconeCategoria categoria={l.categoria} />
                     <div className="flex min-w-0 flex-col">
-                      <span className="truncate">{l.descricao}</span>
+                      <span className="truncate">
+                        {l.descricao}
+                        <SeloParcela l={l} />
+                      </span>
                       <span className="text-xs font-thin text-muted-foreground/40">
-                        {[l.categoria, l.cartaoNome, l.permuta && 'Permuta', sufixoParcela(l)].filter(Boolean).join(' · ')}
+                        {[l.categoria, l.cartaoNome, l.permuta && 'Permuta'].filter(Boolean).join(' · ')}
                       </span>
                     </div>
                   </div>
@@ -923,7 +1098,7 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
 
           {visualizacao === 'lista' && !carregando && itensEsteMes.length > 0 && (
             <div className={cn(gruposPorData.length > 0 && 'mt-4 border-t border-white/10 pt-4')}>
-              <p className="px-1 pb-2 text-xs font-light text-muted-foreground">Este mês</p>
+              <p className="px-1 pb-2 text-xs font-light text-muted-foreground">Mês</p>
               {itensEsteMes.map((item, indiceItem) => {
                 const fatura = item.fatura
                 const aberta = !!fatura && faturasAbertas.has(item.id)
@@ -937,33 +1112,36 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
                           pago={estaPago(item)}
                           onAlternarPago={() => alternarPago(item)}
                         />
-                        <div className="flex min-w-0 flex-col">
+                        {/* na fatura, clicar no nome abre/fecha as compras dela */}
+                        <div
+                          className={cn('flex min-w-0 flex-col', fatura && 'cursor-pointer select-none')}
+                          {...(fatura && {
+                            onClick: () => alternarFaturaAberta(item.id),
+                            onKeyDown: (e: { key: string }) => e.key === 'Enter' && alternarFaturaAberta(item.id),
+                            role: 'button',
+                            tabIndex: 0,
+                            'aria-expanded': aberta,
+                          })}
+                        >
+                          {/* sem data; fatura (conta fixa) mostra o infinito, o
+                              resto a parcela */}
                           <span className="truncate">
-                            <span className="mr-1.5 text-xs font-light tabular-nums text-muted-foreground">
-                              {formatDataCurta(item.data)}
-                            </span>
                             {item.descricao}
+                            {fatura ? (
+                              <span className="ml-1.5 text-xs font-light text-muted-foreground">∞</span>
+                            ) : (
+                              <SeloParcela l={item} />
+                            )}
                           </span>
                           <span className="text-xs font-thin text-muted-foreground/40">
                             {fatura
                               ? subtituloFatura(fatura)
-                              : [item.categoria, item.cartaoNome, sufixoParcela(item)].filter(Boolean).join(' · ')}
+                              : [item.categoria, item.cartaoNome].filter(Boolean).join(' · ')}
                           </span>
                         </div>
                       </div>
                       {fatura ? (
-                        <div className="flex shrink-0 items-center gap-1">
-                          <span className="font-medium text-rose-400">- {brl(item.valor)}</span>
-                          <button
-                            type="button"
-                            onClick={() => alternarFaturaAberta(item.id)}
-                            aria-expanded={aberta}
-                            aria-label={aberta ? 'Fechar compras da fatura' : 'Ver compras da fatura'}
-                            className="-mr-1 flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-white/5 hover:text-foreground"
-                          >
-                            <IconChevronDown className={cn('size-4 transition-transform', aberta && 'rotate-180')} />
-                          </button>
-                        </div>
+                        <span className="shrink-0 font-medium text-rose-400">- {brl(item.valor)}</span>
                       ) : (
                         <span
                           onClick={() => abrirEdicao(item)}
@@ -979,18 +1157,14 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
 
                     {fatura && aberta && (
                       <div className="mb-2 ml-[18px] flex flex-col border-l border-white/10 pl-5">
-                        {fatura.compras.map((c) => (
+                        {[...fatura.compras].sort((a, b) => b.data.localeCompare(a.data)).map((c) => (
                           <div key={c.id} className="flex items-center justify-between gap-3 py-1.5 text-xs">
                             <div className="flex min-w-0 flex-col">
                               <span className="truncate text-muted-foreground">
-                                <span className="mr-1.5 font-light tabular-nums text-muted-foreground/60">
-                                  {formatDataCurta(c.data)}
-                                </span>
                                 {c.descricao}
+                                <SeloParcela l={c} />
                               </span>
-                              <span className="font-thin text-muted-foreground/40">
-                                {[c.categoria, sufixoParcela(c)].filter(Boolean).join(' · ')}
-                              </span>
+                              <span className="font-thin text-muted-foreground/40">{c.categoria}</span>
                             </div>
                             <span
                               onClick={() => abrirEdicao(c)}
@@ -1014,7 +1188,8 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
       </Card>
 
       <Dialog open={!!editando} onOpenChange={(aberto) => !aberto && fecharEdicao()}>
-        <DialogContent className="brand-glass-menu sm:max-w-sm">
+        {/* max-h + rolagem: no celular o popup nao pode passar da tela */}
+        <DialogContent className="brand-glass-menu max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>Editar lançamento</DialogTitle>
           </DialogHeader>
@@ -1079,6 +1254,18 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
 
             <div className="flex items-center gap-2">
               <CampoValor value={editValor} onChange={setEditValor} className="flex-1" />
+              {/* quantidade de parcelas (recorrente nao tem total) */}
+              {editando && !editando.parcelaIndefinida && (
+                <Input
+                  inputMode="numeric"
+                  placeholder="Nº"
+                  title="Quantidade de parcelas"
+                  aria-label="Quantidade de parcelas"
+                  value={editParcelas}
+                  onChange={(e) => setEditParcelas(e.target.value.replace(/\D/g, '').slice(0, 3))}
+                  className={cn(ALTURA_CAMPO, 'w-14 shrink-0 text-center')}
+                />
+              )}
               <DatePickerIcone value={editData} onChange={setEditData} />
             </div>
 
@@ -1095,7 +1282,10 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
                       key={opcao.valor}
                       type="button"
                       variant="outline"
-                      onClick={() => setEscopoExclusao(opcao.valor)}
+                      onClick={() => {
+                        setEscopoExclusao(opcao.valor)
+                        setConfirmandoExclusao(false)
+                      }}
                       className={cn(
                         ALTURA_CAMPO,
                         'min-w-0 flex-1 px-2 text-xs',
@@ -1118,7 +1308,7 @@ export function FinanceiroPainel({ area, mesAno }: FinanceiroPainelProps) {
               disabled={excluindo || salvandoEdicao}
               className={cn(ALTURA_CAMPO, 'text-rose-400 hover:text-rose-400')}
             >
-              {excluindo ? 'Excluindo...' : 'Excluir'}
+              {excluindo ? 'Excluindo...' : confirmandoExclusao ? 'Confirmar exclusão' : 'Excluir'}
             </Button>
             <Button onClick={salvarEdicao} disabled={salvandoEdicao || excluindo} className={ALTURA_CAMPO}>
               {salvandoEdicao ? 'Salvando...' : 'Alterar'}
